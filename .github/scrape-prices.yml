@@ -1,0 +1,72 @@
+name: 🔍 Smart Price Scraper (Pull-based)
+
+on:
+  # Manual trigger - Nhấn nút để cào ngay
+  workflow_dispatch:
+    inputs:
+      force_scrape:
+        description: 'Force scrape regardless of schedule'
+        required: false
+        default: 'false'
+        type: boolean
+  
+  # Scheduled trigger - Chạy mỗi 15 phút để check lịch
+  schedule:
+    - cron: '*/15 * * * *'
+
+jobs:
+  smart-scrape:
+    name: 🤖 Smart Scrape Decision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      # 1. Checkout repository
+      - name: 📁 Checkout Repository
+        uses: actions/checkout@v4
+      
+      # 2. Setup Node.js
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      # 3. Install dependencies
+      - name: 📦 Install Dependencies
+        run: npm ci
+      
+      # 4. Run smart scraper với decision logic
+      - name: 🧠 Smart Scrape Decision & Execute
+        env:
+          # Firebase configuration
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_PRIVATE_KEY_ID: ${{ secrets.FIREBASE_PRIVATE_KEY_ID }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_CLIENT_ID: ${{ secrets.FIREBASE_CLIENT_ID }}
+          FIREBASE_CLIENT_X509_CERT_URL: ${{ secrets.FIREBASE_CLIENT_X509_CERT_URL }}
+          
+          # GitHub Actions environment
+          GITHUB_ACTIONS: true
+          
+          # Force scrape flag
+          FORCE_SCRAPE: ${{ github.event.inputs.force_scrape }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force_scrape }}" = "true" ]; then
+            echo "🚨 Force scraping triggered manually..."
+            npm run scrape
+          else
+            echo "🤖 Running smart decision logic..."
+            npm run scrape:decide
+          fi
+      
+      # 5. Upload logs
+      - name: 📊 Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-logs-${{ github.run_number }}
+          path: |
+            *.log
+          retention-days: 3

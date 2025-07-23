@@ -1,0 +1,22 @@
+{
+  "name": "smart-price-scraper",
+  "version": "1.0.0",
+  "description": "Smart price scraper with UI-configurable scheduling",
+  "main": "src/cli-scraper.js",
+  "scripts": {
+    "start": "node server.js",
+    "scrape": "node src/cli-scraper.js --manual",
+    "scrape:scheduled": "node src/cli-scraper.js --scheduled", 
+    "scrape:decide": "node src/cli-scraper.js --decide",
+    "test": "node src/cli-scraper.js --test"
+  },
+  "dependencies": {
+    "puppeteer": "^22.15.0",
+    "firebase-admin": "^12.5.0",
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
