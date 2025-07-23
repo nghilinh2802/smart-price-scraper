@@ -4,7 +4,7 @@ const { initializeFirebase } = require('./firebase-config');
 const { performScraping } = require('./scraper');
 
 // Initialize Firebase
-const db = initializeFirebase();
+let db;
 
 // Timezone offset for Vietnam (UTC+7)
 const VN_TIMEZONE_OFFSET = 7 * 60; // minutes
@@ -27,7 +27,7 @@ async function shouldRun() {
         
         const doc = await db.collection('scheduleConfig').doc('main').get();
         if (!doc.exists) {
-            console.log('❌ No schedule config found');
+            console.log('❌ No schedule config found in Firestore');
             return false;
         }
         
@@ -121,9 +121,10 @@ async function shouldRun() {
 
 async function updateLastRun() {
     try {
+        const admin = require('firebase-admin');
         await db.collection('scheduleConfig').doc('main').update({
-            lastRun: new Date(),
-            updatedAt: new Date()
+            lastRun: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
         console.log('✅ Updated lastRun timestamp');
     } catch (error) {
@@ -135,6 +136,12 @@ async function main() {
     try {
         console.log('🚀 Smart Price Scraper CLI Starting...');
         console.log(`📍 Arguments: ${process.argv.join(' ')}`);
+        console.log(`🌍 Environment: ${process.env.GITHUB_ACTIONS ? 'GitHub Actions' : 'Local'}`);
+        
+        // Initialize Firebase first
+        console.log('🔥 Initializing Firebase...');
+        db = initializeFirebase();
+        console.log('✅ Firebase connection established!');
         
         const isDecideMode = process.argv.includes('--decide');
         const isManual = process.argv.includes('--manual');
@@ -143,9 +150,19 @@ async function main() {
         
         if (isTest) {
             console.log('🧪 Test mode - checking Firebase connection...');
-            const testDoc = await db.collection('scheduleConfig').doc('main').get();
-            console.log(`✅ Firebase connected. Config exists: ${testDoc.exists}`);
-            return;
+            try {
+                const testDoc = await db.collection('scheduleConfig').doc('main').get();
+                console.log(`✅ Firebase connected successfully! Config exists: ${testDoc.exists}`);
+                
+                // Test products collection
+                const productsSnapshot = await db.collection('products').limit(1).get();
+                console.log(`✅ Products collection accessible! Has data: ${!productsSnapshot.empty}`);
+                
+                return;
+            } catch (testError) {
+                console.error('❌ Firebase test failed:', testError.message);
+                process.exit(1);
+            }
         }
         
         let shouldExecute = false;
@@ -184,36 +201,41 @@ async function main() {
         const duration = endTime - startTime;
         
         // Save session to Firestore
+        const admin = require('firebase-admin');
         const sessionData = {
             id: sessionId,
-            start_time: startTime,
-            end_time: endTime,
+            start_time: admin.firestore.Timestamp.fromDate(startTime),
+            end_time: admin.firestore.Timestamp.fromDate(endTime),
             duration_ms: duration,
             run_type: runType,
             total_results: results.length,
             success_count: results.filter(r => r.status === 'found_with_price').length,
+            total_products: Math.ceil(results.length / 3), // 3 websites per product
+            total_suppliers: 3,
             is_scheduled: runType === 'scheduled',
             status: 'completed',
-            created_at: new Date()
+            created_at: admin.firestore.FieldValue.serverTimestamp()
         };
         
+        console.log('💾 Saving session to Firestore...');
         await db.collection('scrapeSessions').doc(sessionId).set(sessionData);
-        console.log(`💾 Session saved: ${sessionId}`);
+        console.log(`✅ Session saved: ${sessionId}`);
         
-        // Save price data
+        // Save price data if any
         if (results.length > 0) {
+            console.log('💾 Saving price data to Firestore...');
             const batch = db.batch();
             results.forEach((result, index) => {
                 const docRef = db.collection('priceData').doc(`${sessionId}_${index}`);
                 batch.set(docRef, {
                     ...result,
                     sessionId: sessionId,
-                    created_at: new Date()
+                    created_at: admin.firestore.FieldValue.serverTimestamp()
                 });
             });
             
             await batch.commit();
-            console.log(`💾 Saved ${results.length} price records`);
+            console.log(`✅ Saved ${results.length} price records to Firestore`);
         }
         
         // Update lastRun for scheduled runs
@@ -222,13 +244,20 @@ async function main() {
         }
         
         // Final summary
-        console.log('\n🎯 EXECUTION COMPLETED!');
+        console.log('\n🎯 EXECUTION COMPLETED SUCCESSFULLY!');
         console.log(`⏱️  Duration: ${Math.round(duration / 1000)} seconds`);
         console.log(`📊 Results: ${sessionData.success_count}/${sessionData.total_results} successful`);
         console.log(`🔗 Session: ${sessionId}`);
+        console.log(`💾 Data saved to Firestore collections: scrapeSessions, priceData`);
         
     } catch (error) {
         console.error('❌ Critical error in main:', error);
+        console.error('📋 Error details:', {
+            message: error.message,
+            stack: error.stack?.substring(0, 500),
+            environment: process.env.GITHUB_ACTIONS ? 'GitHub Actions' : 'Local',
+            timestamp: new Date().toISOString()
+        });
         process.exit(1);
     }
 }

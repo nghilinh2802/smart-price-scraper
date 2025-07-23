@@ -1,7 +1,8 @@
-name: 🔍 Smart Price Scraper (Pull-based)
+name: 🛍️ Smart E-commerce Price Monitor
 
 on:
-  # Manual trigger - Nhấn nút để cào ngay
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       force_scrape:
@@ -9,59 +10,74 @@ on:
         required: false
         default: 'false'
         type: boolean
-  
-  # Scheduled trigger - Chạy mỗi 15 phút để check lịch
   schedule:
     - cron: '*/15 * * * *'
 
 jobs:
-  smart-scrape:
-    name: 🤖 Smart Scrape Decision
+  monitor-prices:
+    name: 📈 Monitor Product Prices
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     
     steps:
-      # 1. Checkout repository
       - name: 📁 Checkout Repository
         uses: actions/checkout@v4
-      
-      # 2. Setup Node.js
+
       - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      
-      # 3. Install dependencies
+
       - name: 📦 Install Dependencies
-        run: npm ci
-      
-      # 4. Run smart scraper với decision logic
-      - name: 🧠 Smart Scrape Decision & Execute
+        run: |
+          npm ci
+          sudo apt-get update
+          sudo apt-get install -y \
+            gconf-service libasound2 libatk1.0-0 libc6 libcairo2 libcups2 \
+            libdbus-1-3 libexpat1 libfontconfig1 libgcc1 libgconf-2-4 \
+            libgdk-pixbuf2.0-0 libglib2.0-0 libgtk-3-0 libnspr4 \
+            libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 \
+            libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 \
+            libxi6 libxrandr2 libxrender1 libxss1 libxtst6 ca-certificates \
+            fonts-liberation libappindicator1 libnss3 lsb-release xdg-utils wget
+
+      - name: 🧪 Test Firebase Connection
         env:
-          # Firebase configuration
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
           FIREBASE_PRIVATE_KEY_ID: ${{ secrets.FIREBASE_PRIVATE_KEY_ID }}
           FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
           FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
           FIREBASE_CLIENT_ID: ${{ secrets.FIREBASE_CLIENT_ID }}
           FIREBASE_CLIENT_X509_CERT_URL: ${{ secrets.FIREBASE_CLIENT_X509_CERT_URL }}
-          
-          # GitHub Actions environment
           GITHUB_ACTIONS: true
-          
-          # Force scrape flag
+        run: |
+          echo "🔍 Testing Firebase connection..."
+          npm run test
+          echo "✅ Firebase connection test completed!"
+
+      - name: 🧠 Smart Scrape Decision & Execute
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_PRIVATE_KEY_ID: ${{ secrets.FIREBASE_PRIVATE_KEY_ID }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_CLIENT_ID: ${{ secrets.FIREBASE_CLIENT_ID }}
+          FIREBASE_CLIENT_X509_CERT_URL: ${{ secrets.FIREBASE_CLIENT_X509_CERT_URL }}
+          GITHUB_ACTIONS: true
           FORCE_SCRAPE: ${{ github.event.inputs.force_scrape }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force_scrape }}" = "true" ]; then
             echo "🚨 Force scraping triggered manually..."
             npm run scrape
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "📝 Push trigger - running test scrape..."
+            npm run scrape
           else
             echo "🤖 Running smart decision logic..."
             npm run scrape:decide
           fi
-      
-      # 5. Upload logs
+
       - name: 📊 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -69,4 +85,17 @@ jobs:
           name: scrape-logs-${{ github.run_number }}
           path: |
             *.log
-          retention-days: 3
+            npm-debug.log*
+          retention-days: 7
+
+      - name: 📧 Summary Report
+        if: always()
+        run: |
+          echo "## 📊 Price Scraping Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow:** ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the logs above for detailed scraping results!" >> $GITHUB_STEP_SUMMARY

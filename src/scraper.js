@@ -31,19 +31,73 @@ function parsePrice(priceText) {
     return null;
 }
 
-// DMX Scraper function
+// Get products from Firestore
+async function getProductsFromFirestore(db) {
+    try {
+        console.log('📊 Fetching products from Firestore...');
+        const snapshot = await db.collection('products').get();
+        
+        if (snapshot.empty) {
+            console.log('⚠️ No products found in Firestore, using sample data');
+            // Fallback to sample data if Firestore is empty
+            return [
+                { id: 'sample1', code: 'HMH.QUYDR2.23E', name: 'Máy rửa bát Bosch HMH.QUYDR2.23E' },
+                { id: 'sample2', code: 'HBD46PPI60', name: 'Máy rửa chén bát Bosch HBD46PPI60' }
+            ];
+        }
+        
+        const products = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            products.push({
+                id: doc.id,
+                code: data.code || data.sku || data.productCode,
+                name: data.name || data.productName,
+                ...data
+            });
+        });
+        
+        console.log(`✅ Fetched ${products.length} products from Firestore`);
+        return products;
+        
+    } catch (error) {
+        console.error('❌ Error fetching products from Firestore:', error);
+        console.log('⚠️ Using sample data as fallback');
+        return [
+            { id: 'sample1', code: 'HMH.QUYDR2.23E', name: 'Máy rửa bát Bosch HMH.QUYDR2.23E' },
+            { id: 'sample2', code: 'HBD46PPI60', name: 'Máy rửa chén bát Bosch HBD46PPI60' }
+        ];
+    }
+}
+
+// DMX Scraper function với improved error handling
 async function fetchPriceFromDienmayxanh(page, sku) {
     const url = `https://www.dienmayxanh.com/search?key=${sku}`;
     console.log(`🔍 Đang cào Điện Máy Xanh - SKU: ${sku}`);
     
     try {
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-        await delay(8000);
+        await page.goto(url, { 
+            waitUntil: 'networkidle0', 
+            timeout: 45000 
+        });
+        await delay(5000);
         
         const containers = await page.$$("a[data-name], .item[data-name]");
         console.log(`Found ${containers.length} DMX containers`);
         
-        for (const container of containers) {
+        if (containers.length === 0) {
+            console.log(`❌ DMX: No containers found for ${sku}`);
+            return {
+                website: 'Điện Máy Xanh',
+                sku: sku,
+                name: null,
+                price: null,
+                rawPrice: null,
+                status: 'Không tìm thấy'
+            };
+        }
+        
+        for (const container of containers.slice(0, 3)) { // Check only first 3 results
             try {
                 const name = await page.evaluate(el => el.getAttribute('data-name'), container);
                 
@@ -64,7 +118,7 @@ async function fetchPriceFromDienmayxanh(page, sku) {
                                 priceNum = parsePrice(priceText);
                             }
                         } catch (e) {
-                            // Continue with other strategies
+                            continue;
                         }
                     }
                     
@@ -104,7 +158,12 @@ async function fetchPriceFromDienmayxanh(page, sku) {
         };
         
     } catch (error) {
-        console.log(`❌ Error scraping DMX for ${sku}:`, error.message);
+        if (error.message.includes('timeout')) {
+            console.log(`⏰ DMX Timeout for ${sku} - website may be slow or blocking requests`);
+        } else {
+            console.log(`❌ Error scraping DMX for ${sku}:`, error.message);
+        }
+        
         return {
             website: 'Điện Máy Xanh',
             sku: sku,
@@ -122,7 +181,10 @@ async function fetchPriceFromWellhome(page, sku) {
     console.log(`🔍 Đang cào WellHome - SKU: ${sku}`);
     
     try {
-        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(searchUrl, { 
+            waitUntil: 'networkidle0', 
+            timeout: 30000 
+        });
         await delay(3000);
         
         const productData = await page.evaluate(() => {
@@ -196,7 +258,10 @@ async function fetchPriceFromQuanghanh(page, sku) {
     console.log(`🔍 Đang cào Điện Máy Quang Hạnh - SKU: ${sku}`);
     
     try {
-        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(searchUrl, { 
+            waitUntil: 'networkidle0', 
+            timeout: 30000 
+        });
         await delay(4000);
         
         const result = await page.evaluate((sku) => {
@@ -263,37 +328,53 @@ async function fetchPriceFromQuanghanh(page, sku) {
     }
 }
 
-// Main scraping function
+// Main scraping function với Firestore integration
 async function performScraping(isScheduled = false) {
     console.log('==== BẮT ĐẦU CÀO GIÁ TỪ CẢ 3 WEBSITE ====');
     
     const allResults = [];
     let browser;
+    let db;
     
     try {
+        // Initialize Firebase
+        const { initializeFirebase } = require('./firebase-config');
+        db = initializeFirebase();
+        
+        // Get products from Firestore
+        const products = await getProductsFromFirestore(db);
+        
+        if (products.length === 0) {
+            console.log('❌ No products to scrape');
+            return [];
+        }
+        
+        // Initialize Puppeteer với settings tối ưu cho GitHub Actions
+        console.log('🚀 Launching browser...');
         browser = await puppeteer.launch({
             headless: 'new',
             args: [
                 '--no-sandbox',
+                '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage', 
                 '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor',
                 '--window-size=1920,1080',
-                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             ]
         });
         
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        await page.setViewport({ width: 1920, height: 1080 });
         
-        // Sample products - thay thế bằng data từ Firestore
-        const sampleProducts = [
-            { code: 'HMH.QUYDR2.23E', name: 'Sample Product 1' },
-            { code: 'HBD46PPI60', name: 'Sample Product 2' }
-        ];
+        console.log(`📊 Processing ${products.length} products...`);
         
-        for (const product of sampleProducts) {
+        // Process each product
+        for (const product of products) {
             const sku = product.code;
-            console.log(`\n🚀 Processing SKU: ${sku}`);
+            console.log(`\n🚀 Processing SKU: ${sku} (${product.name || 'Unknown product'})`);
             
             // Cào từ Điện Máy Xanh
             const dmxResult = await fetchPriceFromDienmayxanh(page, sku);
@@ -311,6 +392,8 @@ async function performScraping(isScheduled = false) {
                 is_scheduled: isScheduled
             });
             
+            await delay(2000); // Delay between websites
+            
             // Cào từ WellHome
             const whResult = await fetchPriceFromWellhome(page, sku);
             allResults.push({
@@ -326,6 +409,8 @@ async function performScraping(isScheduled = false) {
                 currency: 'VND',
                 is_scheduled: isScheduled
             });
+            
+            await delay(2000);
             
             // Cào từ Điện Máy Quang Hạnh
             const qhResult = await fetchPriceFromQuanghanh(page, sku);
@@ -343,7 +428,7 @@ async function performScraping(isScheduled = false) {
                 is_scheduled: isScheduled
             });
             
-            await delay(2000);
+            await delay(3000); // Longer delay between products
         }
         
         // Thống kê kết quả
@@ -352,10 +437,10 @@ async function performScraping(isScheduled = false) {
         const successfulQh = allResults.filter(r => r.supplier === 'Điện Máy Quang Hạnh' && r.status === 'found_with_price').length;
         
         console.log('\n==== THỐNG KÊ KẾT QUẢ ====');
-        console.log(`✅ Điện Máy Xanh: ${successfulDmx}/${sampleProducts.length} SKU thành công`);
-        console.log(`✅ WellHome: ${successfulWh}/${sampleProducts.length} SKU thành công`);
-        console.log(`✅ Điện Máy Quang Hạnh: ${successfulQh}/${sampleProducts.length} SKU thành công`);
-        console.log(`📊 Tổng cộng: ${successfulDmx + successfulWh + successfulQh}/${sampleProducts.length * 3} kết quả`);
+        console.log(`✅ Điện Máy Xanh: ${successfulDmx}/${products.length} SKU thành công`);
+        console.log(`✅ WellHome: ${successfulWh}/${products.length} SKU thành công`);
+        console.log(`✅ Điện Máy Quang Hạnh: ${successfulQh}/${products.length} SKU thành công`);
+        console.log(`📊 Tổng cộng: ${successfulDmx + successfulWh + successfulQh}/${products.length * 3} kết quả`);
         
         return allResults;
         
@@ -364,9 +449,10 @@ async function performScraping(isScheduled = false) {
         throw error;
     } finally {
         if (browser) {
+            console.log('🔒 Closing browser...');
             await browser.close();
         }
     }
 }
 
-module.exports = { performScraping };
+module.exports = { performScraping, getProductsFromFirestore };
