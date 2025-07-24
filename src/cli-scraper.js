@@ -2,29 +2,18 @@
 
 const admin = require('firebase-admin');
 const { performScraping, getScrapingDataFromFirestore, saveToFirestore } = require('./scraper');
+const { initializeFirebase } = require('./firebase-config');  // FIXED: Import the missing module
 
-// Initialize Firebase (giữ nguyên config từ code cũ)
-let serviceAccount = {};
-if (process.env.FIREBASE_PRIVATE_KEY) {
-  serviceAccount = {
-    type: 'service_account',
-    project_id: process.env.FIREBASE_PROJECT_ID,
-    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-    private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-    client_email: process.env.FIREBASE_CLIENT_EMAIL,
-    client_id: process.env.FIREBASE_CLIENT_ID,
-    auth_uri: 'https://accounts.google.com/o/oauth2/auth',
-    token_uri: 'https://oauth2.googleapis.com/token',
-    auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
-    client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL,
-    universe_domain: 'googleapis.com'
-  };
-} else {
-  serviceAccount = require('./firebase-config.json');
+// Initialize Firebase with error handling
+let db;
+try {
+  console.log('🔥 Initializing Firebase...');
+  db = initializeFirebase();
+  console.log('✅ Firebase connection established!');
+} catch (error) {
+  console.error('❌ Failed to initialize Firebase:', error.message);
+  process.exit(1);  // Exit if Firebase fails
 }
-
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-const db = admin.firestore();
 
 // Timezone offset for Vietnam (UTC+7)
 const VN_TIMEZONE_OFFSET = 7 * 60; // minutes
@@ -157,11 +146,6 @@ async function main() {
     console.log(`📍 Arguments: ${process.argv.join(' ')}`);
     console.log(`🌍 Environment: ${process.env.GITHUB_ACTIONS ? 'GitHub Actions' : 'Local'}`);
     
-    // Initialize Firebase
-    console.log('🔥 Initializing Firebase...');
-    const db = initializeFirebase();
-    console.log('✅ Firebase connection established!');
-    
     const isDecideMode = process.argv.includes('--decide');
     const isManual = process.argv.includes('--manual');
     const isTest = process.argv.includes('--test');
@@ -218,7 +202,7 @@ async function main() {
     const endTime = new Date();
     const duration = endTime - startTime;
     
-    // Save to Firestore - Giữ giống code cũ
+    // Save to Firestore
     await saveToFirestore(db, sessionId, results);
     
     // Update lastRun for scheduled runs
@@ -244,4 +228,3 @@ main().catch(error => {
   console.error('💥 Unhandled error:', error);
   process.exit(1);
 });
-
