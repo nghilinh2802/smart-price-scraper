@@ -267,7 +267,6 @@
 //     console.error('💥 Unhandled error:', error);
 //     process.exit(1);
 // });
-
 #!/usr/bin/env node
 
 const admin = require('firebase-admin');
