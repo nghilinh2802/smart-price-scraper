@@ -268,14 +268,33 @@
 //     process.exit(1);
 // });
 
-#!/usr/bin/env node
+#!/usr/bin/env node  // Shebang ở dòng 1, fix SyntaxError
 
-const { initializeFirebase } = require('./firebase-config');
-const { performScraping, getProductsFromFirestore } = require('./scraper');
 const admin = require('firebase-admin');
+const { performScraping, getScrapingDataFromFirestore, saveToFirestore } = require('./scraper');
 
-// Initialize Firebase
-let db = initializeFirebase();
+// Initialize Firebase (giữ nguyên config từ code cũ)
+let serviceAccount = {};
+if (process.env.FIREBASE_PRIVATE_KEY) {
+  serviceAccount = {
+    type: 'service_account',
+    project_id: process.env.FIREBASE_PROJECT_ID,
+    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+    private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    client_email: process.env.FIREBASE_CLIENT_EMAIL,
+    client_id: process.env.FIREBASE_CLIENT_ID,
+    auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+    token_uri: 'https://oauth2.googleapis.com/token',
+    auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+    client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL,
+    universe_domain: 'googleapis.com'
+  };
+} else {
+  serviceAccount = require('./firebase-config.json');
+}
+
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+const db = admin.firestore();
 
 // Timezone offset for Vietnam (UTC+7)
 const VN_TIMEZONE_OFFSET = 7 * 60; // minutes
@@ -329,10 +348,10 @@ async function shouldRun() {
     
     // Calculate frequency in milliseconds
     const freqMs = {
-        '1h': 60 * 60 * 1000,      // 1 hour
-        '6h': 6 * 60 * 60 * 1000,  // 6 hours
-        '12h': 12 * 60 * 60 * 1000, // 12 hours
-        '24h': 24 * 60 * 60 * 1000  // 24 hours
+        '1h': 60 * 60 * 1000,
+        '6h': 6 * 60 * 60 * 1000,
+        '12h': 12 * 60 * 60 * 1000,
+        '24h': 24 * 60 * 60 * 1000
     }[frequency];
     
     if (!freqMs) {
@@ -408,6 +427,11 @@ async function main() {
     console.log(`📍 Arguments: ${process.argv.join(' ')}`);
     console.log(`🌍 Environment: ${process.env.GITHUB_ACTIONS ? 'GitHub Actions' : 'Local'}`);
     
+    // Initialize Firebase
+    console.log('🔥 Initializing Firebase...');
+    const db = initializeFirebase();
+    console.log('✅ Firebase connection established!');
+    
     const isDecideMode = process.argv.includes('--decide');
     const isManual = process.argv.includes('--manual');
     const isTest = process.argv.includes('--test');
@@ -419,7 +443,6 @@ async function main() {
         const testDoc = await db.collection('scheduleConfig').doc('main').get();
         console.log(`✅ Firebase connected successfully! Config exists: ${testDoc.exists}`);
         
-        // Test products collection
         const productsSnapshot = await db.collection('products').limit(1).get();
         console.log(`✅ Products collection accessible! Has data: ${!productsSnapshot.empty}`);
         
@@ -465,42 +488,8 @@ async function main() {
     const endTime = new Date();
     const duration = endTime - startTime;
     
-    // Save session to Firestore
-    const sessionData = {
-        id: sessionId,
-        start_time: admin.firestore.Timestamp.fromDate(startTime),
-        end_time: admin.firestore.Timestamp.fromDate(endTime),
-        duration_ms: duration,
-        run_type: runType,
-        total_results: results.length,
-        success_count: results.filter(r => r.status === 'Còn hàng').length,  // Match status từ code cũ
-        total_products: Math.ceil(results.length / 3), // 3 websites per product
-        total_suppliers: 3,
-        is_scheduled: runType === 'scheduled',
-        status: 'completed',
-        created_at: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    console.log('💾 Saving session to Firestore...');
-    await db.collection('scrapeSessions').doc(sessionId).set(sessionData);
-    console.log(`✅ Session saved: ${sessionId}`);
-    
-    // Save price data if any
-    if (results.length > 0) {
-        console.log('💾 Saving price data to Firestore...');
-        const batch = db.batch();
-        results.forEach((result, index) => {
-            const docRef = db.collection('priceData').doc(`${sessionId}_${index}`);
-            batch.set(docRef, {
-                ...result,
-                sessionId: sessionId,
-                created_at: admin.firestore.FieldValue.serverTimestamp()
-            });
-        });
-        
-        await batch.commit();
-        console.log(`✅ Saved ${results.length} price records to Firestore`);
-    }
+    // Save to Firestore - Giữ giống code cũ
+    await saveToFirestore(db, sessionId, results);
     
     // Update lastRun for scheduled runs
     if (runType === 'scheduled') {
@@ -510,7 +499,7 @@ async function main() {
     // Final summary
     console.log('\n🎯 EXECUTION COMPLETED SUCCESSFULLY!');
     console.log(`⏱️  Duration: ${Math.round(duration / 1000)} seconds`);
-    console.log(`📊 Results: ${sessionData.success_count}/${sessionData.total_results} successful`);
+    console.log(`📊 Results: ${results.filter(r => r.status === 'Còn hàng').length}/${results.length} successful`);
     console.log(`🔗 Session: ${sessionId}`);
     console.log(`💾 Data saved to Firestore collections: scrapeSessions, priceData`);
     
@@ -525,3 +514,4 @@ main().catch(error => {
   console.error('💥 Unhandled error:', error);
   process.exit(1);
 });
+
