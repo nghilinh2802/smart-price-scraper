@@ -268,7 +268,7 @@
 //     process.exit(1);
 // });
 
-#!/usr/bin/env node  // Shebang ở dòng 1, fix SyntaxError
+#!/usr/bin/env node
 
 const admin = require('firebase-admin');
 const { performScraping, getScrapingDataFromFirestore, saveToFirestore } = require('./scraper');
